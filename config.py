@@ -22,3 +22,6 @@ MIN_CONFIDENCE = 0.5         # ignore detections below this confidence
 IGNORED_CLASSES = {"person"} # people walk around; they are not part of a zone
 MIN_SNAPSHOT_VOTES = 2       # an object must be seen in at least this many snapshots
 
+# --- Main app -----------------------------------------------------------
+ZONE_COOLDOWN = 5            # seconds a zone must be out of view before it is scanned again
+DB_PATH = "mappal.db"        # SQLite memory file (not committed to git)
