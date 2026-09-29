@@ -11,3 +11,7 @@ CAMERA_SOURCE = 0
 ARUCO_DICT = "DICT_4X4_50"   # name of the OpenCV ArUco dictionary
 ZONES = {0: "Desk", 1: "Shelf", 2: "Door", 3: "Window"}
 
+# --- Snapshots ----------------------------------------------------------
+SNAPSHOT_SECONDS = 2         # how long to look at a zone when it is first seen
+SNAPSHOT_COUNT = 3           # how many of the sharpest frames go to the AI
+
