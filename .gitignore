@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Large / generated files - never commit
+*.db
+*.pt
+*.onnx
+videos/
+*.mp4
+*.avi
+*.mov
+
+# Generated output (re-create with the tools/ scripts)
+markers/
+samples/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

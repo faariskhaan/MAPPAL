@@ -1,0 +1,4 @@
+opencv-contrib-python>=4.8
+ultralytics>=8.0
+numpy
+pytest
