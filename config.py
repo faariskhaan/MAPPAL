@@ -42,3 +42,8 @@ ROUTINE_RATIO = 0.5          # changed in more than this share of visits = routi
 # --- Pixel baseline (demo Act 3, python main.py --compare) --------------
 PIXEL_THRESHOLD = 30         # a pixel "changed" if its grey value moved more than this
 PIXEL_CHANGED_PERCENT = 10   # the pixel system says CHANGED above this % of pixels
+
+# --- Zone classifier dataset (tools/collect_dataset.py) -----------------
+EXTRA_CLASS = "Other"        # "not in any zone": walls, floor, hallway, blur, hand on lens
+SAVE_INTERVAL = 0.3          # seconds between saved frames while recording
+DATASET_DIR = "dataset"      # photos go to dataset/<session>/<class>/ (not committed)
