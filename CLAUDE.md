@@ -60,3 +60,10 @@ mappal/
 - Write or update a pytest test for any logic (change engine, learner, db). Tests must not need a camera or the YOLO model — use fake inventories.
 - Stay inside the file(s) named in the task unless you ask first.
 - Never commit large files (models, videos, the .db file). Keep them in .gitignore.
+
+## SCOPE UPDATE (supervisor request) — the last change, then locked again
+The supervisor wants an AI part the team trains itself.
+New feature 4: Zone classifier. A MobileNetV2 (transfer learning) trained on our own photos of the zones + an "Other" class. Used together with ArUco markers (markers = fallback).
+Now allowed: torch, torchvision, matplotlib (training and evaluation scripts only), folders training/, dataset/, models/, results/.
+New config values live in config.py. Training runs on Google Colab; the app only loads the finished model on CPU.
+Only ONE person edits main.py at a time (Faris). Everything else stays locked.

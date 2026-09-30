@@ -23,3 +23,8 @@ samples/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Zone classifier: photos stay local, only the final model is committed
+dataset/
+*.pt
+!models/zone_model.pt
