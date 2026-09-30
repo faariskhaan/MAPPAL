@@ -25,3 +25,6 @@ MIN_SNAPSHOT_VOTES = 2       # an object must be seen in at least this many snap
 # --- Main app -----------------------------------------------------------
 ZONE_COOLDOWN = 5            # seconds a zone must be out of view before it is scanned again
 DB_PATH = "mappal.db"        # SQLite memory file (not committed to git)
+
+# --- Live map -----------------------------------------------------------
+STALE_SECONDS = 120          # a zone turns grey if not visited for this long
