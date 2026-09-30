@@ -22,7 +22,8 @@ logic is not changed by this flag.
 Run:  python main.py            (webcam)
       python main.py --source http://192.168.1.23:8080/video   (phone)
       python main.py --compare     (adds the pixel-system panel for Act 3)
-Keys: q / Esc = quit
+      python main.py --demo --compare   (supervisor demo: full screen, large text)
+Keys: q / Esc = quit,  r = reset memory (demo mode)
 """
 
 import argparse
@@ -118,29 +119,62 @@ def draw_text(img, text, org, scale=0.7, color=(255, 255, 255), thickness=2):
     cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
 
 
-def draw_panel(frame, zone, inventory, status):
+def draw_panel(frame, zone, inventory, status, scale=1.0):
     """Status line at the bottom and the object list of the zone on the right."""
     h, w = frame.shape[:2]
-    draw_text(frame, status, (20, h - 20), 0.6, (0, 255, 255))
+    draw_text(frame, status, (20, h - int(20 * scale)), 0.6 * scale, (0, 255, 255))
     if zone is None or inventory is None:
         return
     lines = [f"{zone} memory:"] + (
         [f"  {name}: {count}" for name, count in sorted(inventory.items())] or ["  (no objects)"]
     )
-    x = max(w - 260, 10)
+    line_h = int(28 * scale)
+    x = max(w - int(260 * scale), 10)
+    top = int(70 * scale)
     overlay = frame.copy()
-    cv2.rectangle(overlay, (x - 10, 70), (w - 10, 90 + 28 * len(lines)), (40, 40, 40), -1)
+    cv2.rectangle(overlay, (x - 10, top), (w - 10, top + 20 + line_h * len(lines)), (40, 40, 40), -1)
     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
     for i, line in enumerate(lines):
-        draw_text(frame, line, (x, 98 + 28 * i), 0.6, (255, 255, 255) if i else (0, 255, 0))
+        draw_text(frame, line, (x, top + line_h + line_h * i), 0.6 * scale,
+                  (255, 255, 255) if i else (0, 255, 0))
 
 
-def draw_banner(frame, text):
+def draw_banner(frame, text, scale=1.0):
     """Big orange alert bar near the bottom of the camera view."""
     h, w = frame.shape[:2]
-    cv2.rectangle(frame, (0, h - 110), (w, h - 50), BANNER_COLOR, -1)
-    cv2.putText(frame, "ALERT  " + text, (15, h - 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
-                (0, 0, 0), 2, cv2.LINE_AA)
+    bottom = h - int(50 * scale)
+    cv2.rectangle(frame, (0, bottom - int(60 * scale)), (w, bottom), BANNER_COLOR, -1)
+    text = "ALERT  " + text
+    font_scale = 0.8 * scale
+    while font_scale > 0.4:   # shrink long alerts so they fit on a narrow camera view
+        (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
+        if tw <= w - 30:
+            break
+        font_scale -= 0.05
+    cv2.putText(frame, text, (15, bottom - int(20 * scale)), cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale, (0, 0, 0), 2, cv2.LINE_AA)
+
+
+def draw_title_bar(width, scale=1.0):
+    """Demo mode title strip across the top of the window."""
+    height = int(50 * scale)
+    bar = np.full((height, width, 3), (20, 20, 20), np.uint8)
+    # OpenCV fonts are plain ASCII, so the title uses "-" instead of an em dash.
+    cv2.putText(bar, "MAPPAL - The Walking Memory", (15, int(35 * scale)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9 * scale, (255, 255, 255), 2, cv2.LINE_AA)
+    keys = "[R] reset memory   [Q] quit"
+    (tw, _), _ = cv2.getTextSize(keys, cv2.FONT_HERSHEY_SIMPLEX, 0.55 * scale, 1)
+    cv2.putText(bar, keys, (width - tw - 15, int(32 * scale)), cv2.FONT_HERSHEY_SIMPLEX,
+                0.55 * scale, (170, 170, 170), 1, cv2.LINE_AA)
+    return bar
+
+
+def render_scaled(draw, width, height, scale):
+    """Draw a panel smaller and blow it up, so all its text and boxes get `scale` times bigger."""
+    if scale == 1.0:
+        return draw(width, height)
+    small = draw(int(width / scale), int(height / scale))
+    return cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
 
 
 def fit_height(frame, height):
@@ -161,7 +195,10 @@ def main():
     parser.add_argument("--db", default=config.DB_PATH, help="SQLite database file")
     parser.add_argument("--compare", action="store_true",
                         help="Act 3: show the dumb pixel system next to MAPPAL")
+    parser.add_argument("--demo", action="store_true",
+                        help="supervisor demo: full screen, large text, title bar, R = reset memory")
     args = parser.parse_args()
+    ui = config.DEMO_UI_SCALE if args.demo else 1.0
 
     db.init_db(args.db)
     print(f"Loading {config.YOLO_MODEL} on CPU (only once)...")
@@ -179,7 +216,10 @@ def main():
     banner, banner_until = "", 0.0
     failures = 0
 
-    print("Running. Press q or Esc in the window to quit.")
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)      # resizable, keeps the picture's shape
+    if args.demo:
+        cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    print("Running. Press q or Esc in the window to quit" + (", r to reset memory." if args.demo else "."))
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -255,15 +295,35 @@ def main():
             corners = corners * (config.VIEW_HEIGHT / frame.shape[0])
         shown_zone = zone or (job[0] if job else None)
         draw_zone(view, shown_zone, corners)
-        draw_panel(view, shown_zone, db.get_last_inventory(shown_zone) if shown_zone else None, status)
+        draw_panel(view, shown_zone, db.get_last_inventory(shown_zone) if shown_zone else None,
+                   status, ui)
         if banner and now < banner_until:
-            draw_banner(view, banner)
-        panels = [topo.draw(config.MAP_WIDTH, config.VIEW_HEIGHT)]
+            draw_banner(view, banner, ui)
+        panels = [render_scaled(topo.draw, config.MAP_WIDTH, config.VIEW_HEIGHT, ui)]
         if pixels is not None:
-            panels.append(draw_compare_panel(COMPARE_WIDTH, config.VIEW_HEIGHT, compare_result))
-        cv2.imshow(WINDOW, compose(view, *panels))
-        if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            panels.append(render_scaled(
+                lambda w, h: draw_compare_panel(w, h, compare_result),
+                COMPARE_WIDTH, config.VIEW_HEIGHT, ui))
+        window_img = compose(view, *panels)
+        if args.demo:
+            window_img = np.vstack([draw_title_bar(window_img.shape[1], ui), window_img])
+        cv2.imshow(WINDOW, window_img)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord("q"), 27):
             break
+        if args.demo and key in (ord("r"), ord("R")):
+            # Reset memory: empty database, empty map, forget pixel snapshots.
+            db.reset_db()
+            topo = TopoMap()
+            if pixels is not None:
+                pixels.reset()
+            collector.cancel()
+            job = None            # a running analysis is ignored
+            last_seen.clear()
+            banner, compare_result = "", None
+            status = "Memory reset - walk the zones to teach MAPPAL again"
+            print(status)
 
     worker.shutdown(wait=False)
     cap.release()

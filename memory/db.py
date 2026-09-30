@@ -54,6 +54,13 @@ def init_db(path):
     return _conn
 
 
+def reset_db():
+    """Forget everything (the demo's "Reset memory" key). The tables stay, the rows go."""
+    for table in ("inventories", "events", "visits", "zones"):
+        _db().execute(f"DELETE FROM {table}")
+    _db().commit()
+
+
 def close_db():
     """Close the connection (used by tests and at app exit)."""
     global _conn

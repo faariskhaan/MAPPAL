@@ -76,3 +76,14 @@ def test_using_db_before_init_raises():
     db.close_db()
     with pytest.raises(RuntimeError):
         db.save_visit("Shelf", {})
+
+
+def test_reset_forgets_everything():
+    db.save_visit("Shelf", {"bottle": 2}, timestamp=1.0)
+    db.save_events([{"zone": "Shelf", "object": "bottle", "type": "missing",
+                     "before": 2, "after": 0, "severity": "alert"}])
+    db.reset_db()
+    assert db.get_last_inventory("Shelf") is None
+    assert db.get_events() == []
+    db.save_visit("Shelf", {"cup": 1})          # still usable after a reset
+    assert db.get_last_inventory("Shelf") == {"cup": 1}

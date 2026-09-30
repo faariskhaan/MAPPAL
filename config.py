@@ -33,6 +33,7 @@ STALE_SECONDS = 120          # a zone turns grey if not visited for this long
 VIEW_HEIGHT = 540            # height of the app window (camera is resized to this)
 MAP_WIDTH = 540              # width of the map panel on the right
 ALERT_SECONDS = 4            # how long the orange alert banner stays on screen
+DEMO_UI_SCALE = 1.4          # --demo: text and boxes this many times bigger
 
 # --- Learns normal ------------------------------------------------------
 MIN_VISITS = 3               # visits of history needed before anything can be "routine"

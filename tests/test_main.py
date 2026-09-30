@@ -94,3 +94,11 @@ def test_compare_panel_draws_every_state():
                    {"zone": "Shelf", "pixel": None, "mappal": "No change"},
                    {"zone": "Shelf", "pixel": 68.0, "mappal": "No change"}):
         assert draw_compare_panel(330, 540, result).shape == (540, 330, 3)
+
+
+def test_title_bar_and_scaled_panels_have_the_right_size():
+    from main import draw_title_bar, render_scaled
+    assert draw_title_bar(1500, 1.4).shape == (70, 1500, 3)
+    draw = lambda w, h: np.zeros((h, w, 3), np.uint8)
+    assert render_scaled(draw, 540, 540, 1.4).shape == (540, 540, 3)
+    assert render_scaled(draw, 540, 540, 1.0).shape == (540, 540, 3)

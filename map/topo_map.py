@@ -29,7 +29,7 @@ EDGE = (200, 200, 200)
 BACKGROUND = (30, 30, 30)
 
 NODE_W, NODE_H = 130, 50
-TITLE_H, ALERT_H = 45, 70
+TITLE_H, ALERT_H = 75, 70    # title + legend on top, last alert at the bottom
 
 
 class TopoMap:
@@ -151,8 +151,9 @@ def _rounded_box(img, top_left, bottom_right, r, color, thickness):
 
 
 def _draw_legend(img, width):
-    x = width - 305
+    """Colour key on its own row under the title."""
+    x = 20
     for label, color in (("ok", BLUE), ("routine", PEACH), ("alert", ORANGE), ("stale", GREY)):
-        cv2.circle(img, (x, 24), 7, color, -1, cv2.LINE_AA)
-        _text(img, label, (x + 12, 30), 0.5, WHITE, 1)
+        cv2.circle(img, (x, 55), 7, color, -1, cv2.LINE_AA)
+        _text(img, label, (x + 12, 61), 0.5, WHITE, 1)
         x += 30 + len(label) * 10
