@@ -45,6 +45,7 @@ python main.py --source http://192.168.1.23:8080/video
 | `python main.py` | Camera + zone memory on the left, live map on the right |
 | `python main.py --compare` | Adds the "Pixels vs meaning" panel (Act 3) |
 | `python main.py --demo --compare` | Supervisor demo: full screen, large text, title bar |
+| `python main.py --marker-only` | Ignore our trained zone model, ArUco markers only |
 
 Keys: `q`/`Esc` quit, `r` reset memory (demo mode). Deleting `mappal.db` also resets the memory.
 
@@ -77,6 +78,37 @@ Change the light at the Shelf (turn on a lamp or open a curtain; **never full da
 - [ ] Laptop plugged in, phone and laptop on the same Wi-Fi
 - [ ] Backup: laptop webcam (`python main.py --demo --compare`) if the phone stream fails
 
+## 7. Our own AI: the zone classifier
+MAPPAL's zone recognition is a **MobileNetV2 we train ourselves** (transfer learning) on our own photos of the zones plus an `Other` class. The ArUco markers stay as the fallback. When the model is in `models/zone_model.pt`, the screen shows where the zone came from: `Shelf (AI 0.94)` or `Shelf (marker)`.
+
+**Step 1: collect photos** (three separate sessions, different light / angle / time):
+```bash
+python tools/collect_dataset.py walk1      # training   (150+ photos per class)
+python tools/collect_dataset.py walk2      # validation (100+ per class)
+python tools/collect_dataset.py test       # final exam (100+ per class), never trained on
+```
+Keys: `0`-`3` = Desk, Shelf, Door, Window; `4` = Other; `SPACE` = record / pause; `q` = quit.
+`Other` = walls, ceiling, floor, hallway, blurry motion, a hand over the lens. Move slowly, no faces.
+
+**Step 2: train on Google Colab** (Runtime → Change runtime type → GPU). Upload `dataset.zip` and `training/train_zone.py`, then in a cell:
+```
+!unzip -q dataset.zip
+!python train_zone.py --data dataset --train walk1 --val walk2 --test test --out models/zone_model.pt
+!python train_zone.py --data dataset --train walk1 --val walk2 --test test --out models/zone_model_noreg.pt --no-reg
+!zip -qr results.zip results models/zone_model.pt
+```
+Download `results.zip`, put `zone_model.pt` into `models/` and the `results/` folders into `results/`. (It also runs on a laptop CPU, just slower.)
+The two runs are the regularisation evidence: without regularisation, train accuracy is near 100% but test accuracy drops. That gap is overfitting.
+
+**Step 3: evaluate on this laptop:**
+```bash
+python training/evaluate.py --model models/zone_model.pt --test dataset/test
+```
+Writes `results/zone_model/` (confusion matrix, `failures.png`, `eval.json`) and `results/RESULTS.md`. Look at `failures.png` and write the "what went wrong" words in `RESULTS.md`.
+Targets: test accuracy above 90%, under ~100 ms per image on CPU. 99%+ on test is suspicious: the test session probably looks too much like training.
+
+**Honest limits:** YOLO is still pretrained; "Learns Normal" is a rule, not AI; the zone model only knows **this** room (~1000-2000 photos) and struggles with big light / angle changes.
+
 ## Troubleshooting
 - **"Could not open camera source"**: check the phone URL in a browser first; both devices on the same Wi-Fi.
 - **Marker not recognised**: more light, marker flat, fill more of the screen with it.
@@ -94,6 +126,10 @@ zones/aruco_zone.py    marker id -> zone name
 vision/camera.py       webcam / phone stream
 vision/snapshot.py     3 sharpest frames per zone visit
 vision/detector.py     YOLO nano -> inventory dict
+vision/zone_classifier.py  our trained zone model + ZoneSmoother
+tools/collect_dataset.py   collect our own zone photos
+training/train_zone.py     train the zone classifier (Colab or CPU)
+training/evaluate.py       test-session evaluation + results/RESULTS.md
 memory/db.py           SQLite: zones, visits, inventories, events
 memory/change_engine.py   what changed since the last visit
 memory/normal_learner.py  routine vs alert
