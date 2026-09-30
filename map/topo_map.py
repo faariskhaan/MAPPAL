@@ -6,7 +6,8 @@ the same way ("the shelf is next to the door").
 
 Node colours:
   blue   = last visit found no change
-  orange = last visit found a change
+  orange = last visit found an unusual change (alert)
+  peach  = last visit only found routine changes (things that usually change here)
   grey   = not visited for STALE_SECONDS (the memory may be out of date)
 """
 
@@ -21,6 +22,7 @@ import config
 # Colours are BGR (OpenCV order).
 BLUE = (200, 120, 30)
 ORANGE = (0, 140, 255)
+PEACH = (150, 200, 250)   # softer colour for routine changes
 GREY = (130, 130, 130)
 WHITE = (255, 255, 255)
 EDGE = (200, 200, 200)
@@ -36,7 +38,7 @@ class TopoMap:
         self.nodes = []         # zone names in order of discovery
         self.edges = set()      # {("Desk", "Shelf"), ...} - names sorted inside each pair
         self.last_seen = {}     # zone -> time it was last visited
-        self.changed = {}       # zone -> True if its last visit found a change
+        self.changed = {}       # zone -> None, "routine" or "alert" (result of its last visit)
         self.current = None     # the zone the camera is in right now
         self.last_alert = ""    # text shown under the map
 
@@ -44,7 +46,7 @@ class TopoMap:
         """The camera is in `zone` now. Adds the node, and an edge if we walked here from another zone."""
         if zone not in self.nodes:
             self.nodes.append(zone)
-            self.changed[zone] = False
+            self.changed[zone] = None
         if self.current is not None and self.current != zone:
             self.edges.add(tuple(sorted((self.current, zone))))
         self.current = zone
@@ -54,7 +56,12 @@ class TopoMap:
         """Record the outcome of a zone's analysis (list of changes from the change engine)."""
         if zone not in self.nodes:
             self.visit(zone)
-        self.changed[zone] = bool(changes)
+        if any(c.get("severity", "alert") == "alert" for c in changes):
+            self.changed[zone] = "alert"
+        elif changes:
+            self.changed[zone] = "routine"
+        else:
+            self.changed[zone] = None
 
     def set_alert(self, text):
         self.last_alert = text
@@ -63,7 +70,7 @@ class TopoMap:
         now = self.clock() if now is None else now
         if now - self.last_seen.get(zone, now) >= config.STALE_SECONDS:
             return GREY
-        return ORANGE if self.changed.get(zone) else BLUE
+        return {"alert": ORANGE, "routine": PEACH}.get(self.changed.get(zone), BLUE)
 
     def layout(self, width, height):
         """Node centre positions: evenly around a circle, clockwise from the top, in discovery order."""
@@ -144,8 +151,8 @@ def _rounded_box(img, top_left, bottom_right, r, color, thickness):
 
 
 def _draw_legend(img, width):
-    x = width - 250
-    for label, color in (("ok", BLUE), ("changed", ORANGE), ("stale", GREY)):
+    x = width - 305
+    for label, color in (("ok", BLUE), ("routine", PEACH), ("alert", ORANGE), ("stale", GREY)):
         cv2.circle(img, (x, 24), 7, color, -1, cv2.LINE_AA)
         _text(img, label, (x + 12, 30), 0.5, WHITE, 1)
         x += 30 + len(label) * 10

@@ -8,15 +8,22 @@ Types:
   missing        - was there last time, now gone        (before > 0, after = 0)
   new            - was not there last time, now present (before = 0, after > 0)
   count_changed  - still there, but a different number  (before > 0, after > 0)
+
+Severity:
+  alert    - unusual change, shown in orange with a banner
+  routine  - this object changes often here (learned by normal_learner), shown softly
 """
 
+from memory.normal_learner import assign_severity
 
-def compare(zone, old_inventory, new_inventory):
+
+def compare(zone, old_inventory, new_inventory, history=None):
     """Return the list of changes between two inventories (sorted by object name).
 
     old_inventory is None on the first visit of a zone: nothing to compare yet,
     so we return an empty list (the first visit only teaches MAPPAL what is there).
-    For now every change has severity "alert" (Week 3 adds "routine").
+    history = the zone's past inventories (oldest first). When given, the normal
+    learner decides each change's severity; without it every change is an "alert".
     """
     if old_inventory is None:
         return []
@@ -41,6 +48,8 @@ def compare(zone, old_inventory, new_inventory):
             "after": after,
             "severity": "alert",
         })
+    if history is not None:
+        changes = assign_severity(changes, history)
     return changes
 
 

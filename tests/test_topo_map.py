@@ -91,3 +91,13 @@ def test_changed_node_is_drawn_orange():
     x, y = topo.layout(540, 540)["Shelf"]
     # a pixel inside the box but away from the text
     assert tuple(int(v) for v in img[y - 20, x - 55]) == ORANGE
+
+
+def test_routine_only_changes_are_peach_and_alert_wins():
+    from map.topo_map import PEACH
+    topo = TopoMap(clock=FakeClock())
+    topo.set_result("Desk", [{"object": "cup", "severity": "routine"}])
+    assert topo.node_color("Desk") == PEACH
+    topo.set_result("Desk", [{"object": "cup", "severity": "routine"},
+                             {"object": "laptop", "severity": "alert"}])
+    assert topo.node_color("Desk") == ORANGE

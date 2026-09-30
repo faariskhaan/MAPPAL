@@ -65,3 +65,14 @@ def test_compose_puts_camera_left_and_map_right():
     out = compose(cam, topo_img)
     assert out.shape == (540, 1260, 3)
     assert out[:, :720].max() == 0 and out[:, 720:].min() == 255
+
+
+def test_learner_makes_frequent_changes_routine(fresh_db):
+    """The cup on the Desk comes and goes every visit -> after a few visits it is routine."""
+    for inv in ({"laptop": 1, "cup": 1}, {"laptop": 1}, {"laptop": 1, "cup": 1}):
+        process_visit("Desk", inv)
+    _, changes = process_visit("Desk", {"laptop": 1})
+    assert [(c["object"], c["severity"]) for c in changes] == [("cup", "routine")]
+    _, changes = process_visit("Desk", {"cup": 1})
+    assert {c["object"]: c["severity"] for c in changes} == {"cup": "routine", "laptop": "alert"}
+    assert [e["severity"] for e in db.get_events("Desk")][-2:] == ["routine", "alert"]

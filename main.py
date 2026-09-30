@@ -8,9 +8,11 @@ Flow for every camera frame:
   3. SnapshotCollector    -> keeps the 3 sharpest frames for SNAPSHOT_SECONDS
   4. Detector.inventory() -> YOLO nano on those 3 frames only, in a background
                              thread so the camera window never freezes
-  5. process_visit()      -> compare with the last visit (change engine), save the
+  5. process_visit()      -> compare with the last visit (change engine), the normal
+                             learner marks each change "routine" or "alert", save the
                              visit + change events in SQLite
-  6. TopoMap              -> zone turns orange if something changed, blue if not
+  6. TopoMap              -> zone turns orange for an alert, peach for routine, blue
+                             if nothing changed; only alerts get the banner
   7. one window: camera on the left, live map on the right, alert banner
 
 Run:  python main.py            (webcam)
@@ -48,11 +50,13 @@ def should_process(zone, now, last_seen, cooldown):
 def process_visit(zone, inventory):
     """Compare with the last visit, then save the visit and its changes.
 
-    Returns (visit_id, changes). The old inventory is read BEFORE saving the new one,
-    otherwise we would compare the visit with itself.
+    Returns (visit_id, changes). The history is read BEFORE saving the new visit,
+    otherwise we would compare the visit with itself. The normal learner uses the
+    history to mark each change "routine" or "alert".
     """
-    old_inventory = db.get_last_inventory(zone)
-    changes = compare(zone, old_inventory, inventory)
+    history = db.get_visit_history(zone)
+    old_inventory = history[-1] if history else None
+    changes = compare(zone, old_inventory, inventory, history)
     visit_id = db.save_visit(zone, inventory)
     db.save_events(changes)
     return visit_id, changes
@@ -177,15 +181,20 @@ def main():
                 inventory = future.result()
                 visit_id, changes = process_visit(visit_zone, inventory)
                 topo.set_result(visit_zone, changes)
-                if changes:
-                    banner = alert_text(changes)
+                alerts = [c for c in changes if c["severity"] == "alert"]
+                routine = [c for c in changes if c["severity"] == "routine"]
+                if alerts:
+                    # Only unusual changes interrupt with a banner.
+                    banner = alert_text(alerts)
                     banner_until = now + config.ALERT_SECONDS
                     topo.set_alert(banner)
-                    status = f"{visit_zone}: {len(changes)} change(s) - visit #{visit_id}"
+                    status = f"{visit_zone}: {len(alerts)} alert(s) - visit #{visit_id}"
+                elif routine:
+                    status = f"{visit_zone}: routine - {alert_text(routine)}"
                 else:
                     status = f"{visit_zone}: no change - visit #{visit_id}"
                 print(f"[visit #{visit_id}] {visit_zone}: {inventory}  changes: "
-                      f"{[describe(c) for c in changes] or 'none'}")
+                      f"{[describe(c) + ' (' + c['severity'] + ')' for c in changes] or 'none'}")
             except Exception as exc:  # keep the demo running if one visit fails
                 status = f"{visit_zone}: analysis failed ({exc})"
                 print(status)
