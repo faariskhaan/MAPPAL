@@ -28,3 +28,8 @@ DB_PATH = "mappal.db"        # SQLite memory file (not committed to git)
 
 # --- Live map -----------------------------------------------------------
 STALE_SECONDS = 120          # a zone turns grey if not visited for this long
+
+# --- Window -------------------------------------------------------------
+VIEW_HEIGHT = 540            # height of the app window (camera is resized to this)
+MAP_WIDTH = 540              # width of the map panel on the right
+ALERT_SECONDS = 4            # how long the orange alert banner stays on screen

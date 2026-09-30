@@ -20,6 +20,14 @@ pip install -r requirements.txt
    - Point the camera at a marker for ~2 s: the screen shows `Zone: Shelf` and the object list, and the visit is saved in `mappal.db`.
    - Press `q` or `Esc` to quit.
 
+## Week 2 demo (memory + map)
+1. Run `python main.py` (or with `--source <phone url>`).
+2. **Walk 1 (learning):** visit each zone marker for ~2 s. The live map on the right builds as you walk: every zone is a box, every walk between two zones is a line.
+3. Remove an object (e.g. the backpack on the Shelf).
+4. **Walk 2:** wait 5 s away from the zone, then visit it again. The screen shows `ALERT  SHELF: backpack missing` and the Shelf box turns orange.
+   - Blue = no change, orange = changed, grey = not visited for 2 minutes.
+5. To start with an empty memory, delete `mappal.db`.
+
 ## Tests
 ```bash
 python -m pytest

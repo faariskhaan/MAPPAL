@@ -1,15 +1,17 @@
-"""MAPPAL v1 - the live app (Week 1).
+"""MAPPAL v2 - the live app (Week 2: memory + map).
 
 Flow for every camera frame:
-  1. detect_zone()        -> which zone marker is visible?
+  1. detect_zone()        -> which zone marker is visible? (also moves us on the map)
   2. new zone visit?      -> start collecting snapshots (only if the zone was out of
                              view for ZONE_COOLDOWN seconds, so we don't re-scan it
                              every time the marker flickers)
   3. SnapshotCollector    -> keeps the 3 sharpest frames for SNAPSHOT_SECONDS
   4. Detector.inventory() -> YOLO nano on those 3 frames only, in a background
                              thread so the camera window never freezes
-  5. db.save_visit()      -> the inventory is stored in SQLite
-  6. screen shows zone name + object list
+  5. process_visit()      -> compare with the last visit (change engine), save the
+                             visit + change events in SQLite
+  6. TopoMap              -> zone turns orange if something changed, blue if not
+  7. one window: camera on the left, live map on the right, alert banner
 
 Run:  python main.py            (webcam)
       python main.py --source http://192.168.1.23:8080/video   (phone)
@@ -21,15 +23,19 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
+import numpy as np
 
 import config
+from map.topo_map import TopoMap
 from memory import db
+from memory.change_engine import compare, describe
 from vision.camera import open_camera
 from vision.detector import Detector
 from vision.snapshot import SnapshotCollector
 from zones.aruco_zone import detect_zone, draw_zone
 
 WINDOW = "MAPPAL - The Walking Memory"
+BANNER_COLOR = (0, 140, 255)   # orange (BGR)
 
 
 def should_process(zone, now, last_seen, cooldown):
@@ -37,6 +43,29 @@ def should_process(zone, now, last_seen, cooldown):
     if zone not in last_seen:
         return True
     return now - last_seen[zone] >= cooldown
+
+
+def process_visit(zone, inventory):
+    """Compare with the last visit, then save the visit and its changes.
+
+    Returns (visit_id, changes). The old inventory is read BEFORE saving the new one,
+    otherwise we would compare the visit with itself.
+    """
+    old_inventory = db.get_last_inventory(zone)
+    changes = compare(zone, old_inventory, inventory)
+    visit_id = db.save_visit(zone, inventory)
+    db.save_events(changes)
+    return visit_id, changes
+
+
+def alert_text(changes, max_items=2):
+    """Banner text for a list of changes, e.g. 'SHELF: backpack missing  (+1 more)'."""
+    if not changes:
+        return ""
+    text = " | ".join(describe(c) for c in changes[:max_items])
+    if len(changes) > max_items:
+        text += f"  (+{len(changes) - max_items} more)"
+    return text
 
 
 def draw_text(img, text, org, scale=0.7, color=(255, 255, 255), thickness=2):
@@ -48,18 +77,37 @@ def draw_text(img, text, org, scale=0.7, color=(255, 255, 255), thickness=2):
 def draw_panel(frame, zone, inventory, status):
     """Status line at the bottom and the object list of the zone on the right."""
     h, w = frame.shape[:2]
-    draw_text(frame, status, (20, h - 20), 0.7, (0, 255, 255))
+    draw_text(frame, status, (20, h - 20), 0.6, (0, 255, 255))
     if zone is None or inventory is None:
         return
     lines = [f"{zone} memory:"] + (
         [f"  {name}: {count}" for name, count in sorted(inventory.items())] or ["  (no objects)"]
     )
-    x = max(w - 300, 10)
+    x = max(w - 260, 10)
     overlay = frame.copy()
-    cv2.rectangle(overlay, (x - 10, 70), (w - 10, 90 + 30 * len(lines)), (40, 40, 40), -1)
+    cv2.rectangle(overlay, (x - 10, 70), (w - 10, 90 + 28 * len(lines)), (40, 40, 40), -1)
     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
     for i, line in enumerate(lines):
-        draw_text(frame, line, (x, 100 + 30 * i), 0.7, (255, 255, 255) if i else (0, 255, 0))
+        draw_text(frame, line, (x, 98 + 28 * i), 0.6, (255, 255, 255) if i else (0, 255, 0))
+
+
+def draw_banner(frame, text):
+    """Big orange alert bar near the bottom of the camera view."""
+    h, w = frame.shape[:2]
+    cv2.rectangle(frame, (0, h - 110), (w, h - 50), BANNER_COLOR, -1)
+    cv2.putText(frame, "ALERT  " + text, (15, h - 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                (0, 0, 0), 2, cv2.LINE_AA)
+
+
+def fit_height(frame, height):
+    """Resize a camera frame to the window height, keeping its shape."""
+    h, w = frame.shape[:2]
+    return cv2.resize(frame, (int(w * height / h), height))
+
+
+def compose(camera_view, map_view):
+    """Camera on the left, map on the right, in one image."""
+    return np.hstack([camera_view, map_view])
 
 
 def main():
@@ -75,10 +123,12 @@ def main():
     cap = open_camera(args.source)
 
     collector = SnapshotCollector()
+    topo = TopoMap()
     worker = ThreadPoolExecutor(max_workers=1)   # runs YOLO off the camera loop
     job = None             # (zone, future) while the AI is analysing
     last_seen = {}         # zone -> last time its marker was visible
     status = "Point the camera at a zone marker"
+    banner, banner_until = "", 0.0
     failures = 0
 
     print("Running. Press q or Esc in the window to quit.")
@@ -93,8 +143,10 @@ def main():
         failures = 0
         now = time.monotonic()
 
-        # 1. Which zone are we in?
+        # 1. Which zone are we in? Walking into it also moves us on the map.
         zone, corners = detect_zone(frame)
+        if zone is not None:
+            topo.visit(zone)
 
         # 2. Start a new visit when a zone (re)appears after the cooldown.
         if zone is not None:
@@ -117,24 +169,37 @@ def main():
                 job = (visit_zone, worker.submit(detector.inventory, snapshots))
                 status = f"{visit_zone}: AI analysing {len(snapshots)} snapshots..."
 
-        # 5. When the AI is done, save the visit in the database.
+        # 5-6. When the AI is done: compare, save, update the map, raise alerts.
         if job is not None and job[1].done():
             visit_zone, future = job
             job = None
             try:
                 inventory = future.result()
-                visit_id = db.save_visit(visit_zone, inventory)
-                status = f"{visit_zone}: saved visit #{visit_id} to memory"
-                print(f"[visit #{visit_id}] {visit_zone}: {inventory}")
+                visit_id, changes = process_visit(visit_zone, inventory)
+                topo.set_result(visit_zone, changes)
+                if changes:
+                    banner = alert_text(changes)
+                    banner_until = now + config.ALERT_SECONDS
+                    topo.set_alert(banner)
+                    status = f"{visit_zone}: {len(changes)} change(s) - visit #{visit_id}"
+                else:
+                    status = f"{visit_zone}: no change - visit #{visit_id}"
+                print(f"[visit #{visit_id}] {visit_zone}: {inventory}  changes: "
+                      f"{[describe(c) for c in changes] or 'none'}")
             except Exception as exc:  # keep the demo running if one visit fails
                 status = f"{visit_zone}: analysis failed ({exc})"
                 print(status)
 
-        # 6. Show zone name + what MAPPAL remembers about it.
+        # 7. One window: camera + zone memory on the left, live map on the right.
+        view = fit_height(frame, config.VIEW_HEIGHT)
+        if corners is not None:
+            corners = corners * (config.VIEW_HEIGHT / frame.shape[0])
         shown_zone = zone or (job[0] if job else None)
-        draw_zone(frame, shown_zone, corners)
-        draw_panel(frame, shown_zone, db.get_last_inventory(shown_zone) if shown_zone else None, status)
-        cv2.imshow(WINDOW, frame)
+        draw_zone(view, shown_zone, corners)
+        draw_panel(view, shown_zone, db.get_last_inventory(shown_zone) if shown_zone else None, status)
+        if banner and now < banner_until:
+            draw_banner(view, banner)
+        cv2.imshow(WINDOW, compose(view, topo.draw(config.MAP_WIDTH, config.VIEW_HEIGHT)))
         if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
             break
 
