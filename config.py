@@ -37,3 +37,7 @@ ALERT_SECONDS = 4            # how long the orange alert banner stays on screen
 # --- Learns normal ------------------------------------------------------
 MIN_VISITS = 3               # visits of history needed before anything can be "routine"
 ROUTINE_RATIO = 0.5          # changed in more than this share of visits = routine
+
+# --- Pixel baseline (demo Act 3, python main.py --compare) --------------
+PIXEL_THRESHOLD = 30         # a pixel "changed" if its grey value moved more than this
+PIXEL_CHANGED_PERCENT = 10   # the pixel system says CHANGED above this % of pixels

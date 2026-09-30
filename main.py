@@ -15,8 +15,13 @@ Flow for every camera frame:
                              if nothing changed; only alerts get the banner
   7. one window: camera on the left, live map on the right, alert banner
 
+Demo Act 3 (--compare): a side panel also shows what a "dumb" pixel-difference
+system would report for the same visit (demo/pixel_baseline.py). MAPPAL's own
+logic is not changed by this flag.
+
 Run:  python main.py            (webcam)
       python main.py --source http://192.168.1.23:8080/video   (phone)
+      python main.py --compare     (adds the pixel-system panel for Act 3)
 Keys: q / Esc = quit
 """
 
@@ -28,6 +33,7 @@ import cv2
 import numpy as np
 
 import config
+from demo.pixel_baseline import PixelBaseline, verdict
 from map.topo_map import TopoMap
 from memory import db
 from memory.change_engine import compare, describe
@@ -38,6 +44,8 @@ from zones.aruco_zone import detect_zone, draw_zone
 
 WINDOW = "MAPPAL - The Walking Memory"
 BANNER_COLOR = (0, 140, 255)   # orange (BGR)
+GREEN, RED = (80, 200, 80), (60, 60, 230)
+COMPARE_WIDTH = 330
 
 
 def should_process(zone, now, last_seen, cooldown):
@@ -70,6 +78,38 @@ def alert_text(changes, max_items=2):
     if len(changes) > max_items:
         text += f"  (+{len(changes) - max_items} more)"
     return text
+
+
+def mappal_verdict(changes):
+    """What MAPPAL reports for a visit, in a few words (used by the --compare panel)."""
+    alerts = sum(1 for c in changes if c["severity"] == "alert")
+    if alerts:
+        return f"{alerts} ALERT" + ("S" if alerts > 1 else "")
+    return "routine change" if changes else "No change"
+
+
+def draw_compare_panel(width, height, result):
+    """Act 3 side panel: the pixel system's verdict next to MAPPAL's for the last visit."""
+    img = np.full((height, width, 3), (45, 25, 25), np.uint8)
+    cv2.putText(img, "Pixels vs meaning", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                (255, 255, 255), 2, cv2.LINE_AA)
+    if result is None:
+        cv2.putText(img, "Waiting for a zone visit...", (15, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6, (160, 160, 160), 1, cv2.LINE_AA)
+        return img
+    pixel_pct, pixel_word = result["pixel"], verdict(result["pixel"])
+    pixel_line = "first look" if pixel_pct is None else f"{pixel_pct:.0f}% {pixel_word}"
+    mappal_line = result["mappal"]
+    rows = [
+        (f"Zone: {result['zone']}", (255, 255, 255), 0.7, 80),
+        ("Pixel system:", (200, 200, 200), 0.65, 150),
+        (pixel_line, RED if pixel_word == "CHANGED" else GREEN, 1.0, 195),
+        ("MAPPAL (AI):", (200, 200, 200), 0.65, 280),
+        (mappal_line, BANNER_COLOR if "ALERT" in mappal_line else GREEN, 1.0, 325),
+    ]
+    for text, color, scale, y in rows:
+        cv2.putText(img, text, (15, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2, cv2.LINE_AA)
+    return img
 
 
 def draw_text(img, text, org, scale=0.7, color=(255, 255, 255), thickness=2):
@@ -109,9 +149,9 @@ def fit_height(frame, height):
     return cv2.resize(frame, (int(w * height / h), height))
 
 
-def compose(camera_view, map_view):
-    """Camera on the left, map on the right, in one image."""
-    return np.hstack([camera_view, map_view])
+def compose(camera_view, map_view, *extra_panels):
+    """Camera on the left, map on the right (and any extra panels after it), in one image."""
+    return np.hstack([camera_view, map_view, *extra_panels])
 
 
 def main():
@@ -119,6 +159,8 @@ def main():
     parser.add_argument("--source", default=config.CAMERA_SOURCE,
                         help="0 for webcam or a phone stream URL")
     parser.add_argument("--db", default=config.DB_PATH, help="SQLite database file")
+    parser.add_argument("--compare", action="store_true",
+                        help="Act 3: show the dumb pixel system next to MAPPAL")
     args = parser.parse_args()
 
     db.init_db(args.db)
@@ -129,7 +171,9 @@ def main():
     collector = SnapshotCollector()
     topo = TopoMap()
     worker = ThreadPoolExecutor(max_workers=1)   # runs YOLO off the camera loop
-    job = None             # (zone, future) while the AI is analysing
+    job = None             # (zone, future, sharpest snapshot) while the AI is analysing
+    pixels = PixelBaseline() if args.compare else None
+    compare_result = None  # last visit's pixel-vs-MAPPAL result for the side panel
     last_seen = {}         # zone -> last time its marker was visible
     status = "Point the camera at a zone marker"
     banner, banner_until = "", 0.0
@@ -170,12 +214,12 @@ def main():
             if collector.add(frame) and job is None:
                 visit_zone, snapshots = collector.finish()
                 # 4. AI on moments: YOLO runs on the 3 sharp snapshots, in the background.
-                job = (visit_zone, worker.submit(detector.inventory, snapshots))
+                job = (visit_zone, worker.submit(detector.inventory, snapshots), snapshots[0])
                 status = f"{visit_zone}: AI analysing {len(snapshots)} snapshots..."
 
         # 5-6. When the AI is done: compare, save, update the map, raise alerts.
         if job is not None and job[1].done():
-            visit_zone, future = job
+            visit_zone, future, sharpest = job
             job = None
             try:
                 inventory = future.result()
@@ -195,6 +239,12 @@ def main():
                     status = f"{visit_zone}: no change - visit #{visit_id}"
                 print(f"[visit #{visit_id}] {visit_zone}: {inventory}  changes: "
                       f"{[describe(c) + ' (' + c['severity'] + ')' for c in changes] or 'none'}")
+                if pixels is not None:
+                    compare_result = {
+                        "zone": visit_zone,
+                        "pixel": pixels.compare(visit_zone, sharpest) if sharpest is not None else None,
+                        "mappal": mappal_verdict(changes),
+                    }
             except Exception as exc:  # keep the demo running if one visit fails
                 status = f"{visit_zone}: analysis failed ({exc})"
                 print(status)
@@ -208,7 +258,10 @@ def main():
         draw_panel(view, shown_zone, db.get_last_inventory(shown_zone) if shown_zone else None, status)
         if banner and now < banner_until:
             draw_banner(view, banner)
-        cv2.imshow(WINDOW, compose(view, topo.draw(config.MAP_WIDTH, config.VIEW_HEIGHT)))
+        panels = [topo.draw(config.MAP_WIDTH, config.VIEW_HEIGHT)]
+        if pixels is not None:
+            panels.append(draw_compare_panel(COMPARE_WIDTH, config.VIEW_HEIGHT, compare_result))
+        cv2.imshow(WINDOW, compose(view, *panels))
         if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
             break
 

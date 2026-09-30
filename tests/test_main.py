@@ -76,3 +76,21 @@ def test_learner_makes_frequent_changes_routine(fresh_db):
     _, changes = process_visit("Desk", {"cup": 1})
     assert {c["object"]: c["severity"] for c in changes} == {"cup": "routine", "laptop": "alert"}
     assert [e["severity"] for e in db.get_events("Desk")][-2:] == ["routine", "alert"]
+
+
+def test_mappal_verdict():
+    from main import mappal_verdict
+    alert = {"severity": "alert"}
+    routine = {"severity": "routine"}
+    assert mappal_verdict([]) == "No change"
+    assert mappal_verdict([routine]) == "routine change"
+    assert mappal_verdict([alert, routine]) == "1 ALERT"
+    assert mappal_verdict([alert, alert]) == "2 ALERTS"
+
+
+def test_compare_panel_draws_every_state():
+    from main import draw_compare_panel
+    for result in (None,
+                   {"zone": "Shelf", "pixel": None, "mappal": "No change"},
+                   {"zone": "Shelf", "pixel": 68.0, "mappal": "No change"}):
+        assert draw_compare_panel(330, 540, result).shape == (540, 330, 3)
