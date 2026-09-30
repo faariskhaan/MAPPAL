@@ -1,7 +1,12 @@
 """MAPPAL v2 - the live app (Week 2: memory + map).
 
 Flow for every camera frame:
-  1. detect_zone()        -> which zone marker is visible? (also moves us on the map)
+  1. which zone are we in?
+     - our trained zone classifier (MobileNetV2) looks at every CLASSIFY_EVERY-th
+       frame; the ZoneSmoother confirms a zone after ZONE_CONSECUTIVE sure guesses
+       -> source "AI"
+     - otherwise the ArUco marker decides -> source "marker" (the fallback)
+     (walking into a zone also moves us on the map)
   2. new zone visit?      -> start collecting snapshots (only if the zone was out of
                              view for ZONE_COOLDOWN seconds, so we don't re-scan it
                              every time the marker flickers)
@@ -23,10 +28,12 @@ Run:  python main.py            (webcam)
       python main.py --source http://192.168.1.23:8080/video   (phone)
       python main.py --compare     (adds the pixel-system panel for Act 3)
       python main.py --demo --compare   (supervisor demo: full screen, large text)
+      python main.py --marker-only      (ignore the trained zone model, ArUco only)
 Keys: q / Esc = quit,  r = reset memory (demo mode)
 """
 
 import argparse
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -41,6 +48,7 @@ from memory.change_engine import compare, describe
 from vision.camera import open_camera
 from vision.detector import Detector
 from vision.snapshot import SnapshotCollector
+from vision.zone_classifier import ZoneClassifier, ZoneSmoother
 from zones.aruco_zone import detect_zone, draw_zone
 
 WINDOW = "MAPPAL - The Walking Memory"
@@ -56,6 +64,36 @@ def should_process(zone, now, last_seen, cooldown):
     return now - last_seen[zone] >= cooldown
 
 
+def choose_zone(ai_zone, marker_zone):
+    """Zone decision: a zone confirmed by our AI wins, otherwise the marker (fallback).
+
+    Returns (zone or None, source) with source "AI", "marker" or None.
+    """
+    if ai_zone is not None:
+        return ai_zone, "AI"
+    if marker_zone is not None:
+        return marker_zone, "marker"
+    return None, None
+
+
+def load_zone_classifier(path, disabled):
+    """Load our trained zone model, or return None (then the app uses markers only)."""
+    if disabled:
+        print("Zone classifier off (--marker-only): using ArUco markers only.")
+        return None
+    if not os.path.exists(path):
+        print(f"No trained zone model at '{path}' - using ArUco markers only.\n"
+              "  Train one with training/train_zone.py and put it there to enable the AI.")
+        return None
+    try:
+        clf = ZoneClassifier(path)
+    except Exception as exc:  # a broken file must not stop the demo
+        print(f"Could not load zone model '{path}' ({exc}) - using ArUco markers only.")
+        return None
+    print(f"Zone classifier loaded: {path} classes {clf.class_names}")
+    return clf
+
+
 def process_visit(zone, inventory):
     """Compare with the last visit, then save the visit and its changes.
 
@@ -69,6 +107,17 @@ def process_visit(zone, inventory):
     visit_id = db.save_visit(zone, inventory)
     db.save_events(changes)
     return visit_id, changes
+
+
+def zone_label(zone, source, ai_guess):
+    """'Shelf (AI 0.94)', 'Shelf (marker)' or just the zone name."""
+    if zone is None:
+        return None
+    if source == "AI" and ai_guess is not None:
+        return f"{zone} (AI {ai_guess[1]:.2f})"
+    if source == "marker":
+        return f"{zone} (marker)"
+    return zone
 
 
 def alert_text(changes, max_items=2):
@@ -130,7 +179,7 @@ def draw_panel(frame, zone, inventory, status, scale=1.0):
     )
     line_h = int(28 * scale)
     x = max(w - int(260 * scale), 10)
-    top = int(70 * scale)
+    top = int(105 * scale)   # below the zone name and the AI guess line
     overlay = frame.copy()
     cv2.rectangle(overlay, (x - 10, top), (w - 10, top + 20 + line_h * len(lines)), (40, 40, 40), -1)
     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
@@ -197,12 +246,21 @@ def main():
                         help="Act 3: show the dumb pixel system next to MAPPAL")
     parser.add_argument("--demo", action="store_true",
                         help="supervisor demo: full screen, large text, title bar, R = reset memory")
+    parser.add_argument("--marker-only", "--no-model", dest="marker_only", action="store_true",
+                        help="do not use the trained zone classifier, ArUco markers only")
+    parser.add_argument("--zone-model", default=config.ZONE_MODEL_PATH,
+                        help="trained zone classifier file")
     args = parser.parse_args()
     ui = config.DEMO_UI_SCALE if args.demo else 1.0
 
     db.init_db(args.db)
     print(f"Loading {config.YOLO_MODEL} on CPU (only once)...")
     detector = Detector()
+    zone_clf = load_zone_classifier(args.zone_model, args.marker_only)
+    smoother = ZoneSmoother()
+    ai_guess = None        # (label, confidence) of the classifier's latest look
+    ai_zone = None         # zone confirmed by the smoother, or None
+    frame_no = 0
     cap = open_camera(args.source)
 
     collector = SnapshotCollector()
@@ -231,8 +289,13 @@ def main():
         failures = 0
         now = time.monotonic()
 
-        # 1. Which zone are we in? Walking into it also moves us on the map.
-        zone, corners = detect_zone(frame)
+        # 1. Which zone are we in? Our AI first (every CLASSIFY_EVERY frames), marker as fallback.
+        frame_no += 1
+        if zone_clf is not None and frame_no % config.CLASSIFY_EVERY == 0:
+            ai_guess = zone_clf.predict(frame)
+            ai_zone = smoother.update(*ai_guess)
+        marker_zone, corners = detect_zone(frame)
+        zone, source = choose_zone(ai_zone, marker_zone)
         if zone is not None:
             topo.visit(zone)
 
@@ -294,7 +357,10 @@ def main():
         if corners is not None:
             corners = corners * (config.VIEW_HEIGHT / frame.shape[0])
         shown_zone = zone or (job[0] if job else None)
-        draw_zone(view, shown_zone, corners)
+        draw_zone(view, zone_label(shown_zone, source if zone else None, ai_guess), corners)
+        if zone_clf is not None and ai_guess is not None:
+            draw_text(view, f"AI guess: {ai_guess[0]} {ai_guess[1]:.2f}", (20, int(85 * ui)),
+                      0.6 * ui, (255, 200, 120))
         draw_panel(view, shown_zone, db.get_last_inventory(shown_zone) if shown_zone else None,
                    status, ui)
         if banner and now < banner_until:

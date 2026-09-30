@@ -47,3 +47,9 @@ PIXEL_CHANGED_PERCENT = 10   # the pixel system says CHANGED above this % of pix
 EXTRA_CLASS = "Other"        # "not in any zone": walls, floor, hallway, blur, hand on lens
 SAVE_INTERVAL = 0.3          # seconds between saved frames while recording
 DATASET_DIR = "dataset"      # photos go to dataset/<session>/<class>/ (not committed)
+
+# --- Zone classifier in the app (our trained MobileNetV2) ---------------
+ZONE_MODEL_PATH = "models/zone_model.pt"
+ZONE_CONF = 0.85             # the AI must be at least this sure...
+ZONE_CONSECUTIVE = 5         # ...this many predictions in a row before a zone counts
+CLASSIFY_EVERY = 5           # run the classifier on every 5th frame only (CPU budget)

@@ -102,3 +102,26 @@ def test_title_bar_and_scaled_panels_have_the_right_size():
     draw = lambda w, h: np.zeros((h, w, 3), np.uint8)
     assert render_scaled(draw, 540, 540, 1.4).shape == (540, 540, 3)
     assert render_scaled(draw, 540, 540, 1.0).shape == (540, 540, 3)
+
+
+def test_ai_zone_wins_marker_is_fallback():
+    from main import choose_zone
+    assert choose_zone("Shelf", "Desk") == ("Shelf", "AI")
+    assert choose_zone(None, "Desk") == ("Desk", "marker")
+    assert choose_zone("Shelf", None) == ("Shelf", "AI")      # marker hidden, AI still knows
+    assert choose_zone(None, None) == (None, None)
+
+
+def test_zone_label_shows_the_source():
+    from main import zone_label
+    assert zone_label("Shelf", "AI", ("Shelf", 0.937)) == "Shelf (AI 0.94)"
+    assert zone_label("Desk", "marker", ("Other", 0.5)) == "Desk (marker)"
+    assert zone_label("Desk", None, None) == "Desk"
+    assert zone_label(None, None, None) is None
+
+
+def test_missing_zone_model_falls_back_to_markers(tmp_path, capsys):
+    from main import load_zone_classifier
+    assert load_zone_classifier(str(tmp_path / "nope.pt"), disabled=False) is None
+    assert "using ArUco markers only" in capsys.readouterr().out
+    assert load_zone_classifier("whatever.pt", disabled=True) is None
